@@ -1,0 +1,23 @@
+{
+  "name": "zbynekstara-npm-test",
+  "private": true,
+  "packageManager": "yarn@4.7.0",
+  "workspaces": [
+    "./packages/*"
+  ],
+  "scripts": {
+    "dist": "yarn workspaces foreach --all -tvv run dist",
+    "test": "yarn workspaces foreach --all -tvv run test",
+    "lint": "yarn workspaces foreach --all -tvv run lint",
+    "release-status": "changeset status",
+    "release-version": "node scripts/release-info.mjs && node scripts/changelog-from-changesets.mjs && changeset version",
+    "release-publish": "yarn workspaces foreach --all --no-private -t npm publish --access public --tolerate-republish"
+  },
+  "devDependencies": {
+    "@changesets/assemble-release-plan": "6.0.10",
+    "@changesets/cli": "2.31.1",
+    "@changesets/config": "3.1.4",
+    "@changesets/read": "0.6.7",
+    "@manypkg/get-packages": "1.1.3"
+  }
+}

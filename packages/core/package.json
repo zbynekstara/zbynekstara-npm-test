@@ -1,0 +1,19 @@
+{
+  "name": "@zbynekstara-test/core",
+  "version": "1.0.0",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "main": "index.js",
+  "files": [
+    "index.js"
+  ],
+  "scripts": {
+    "dist": "node -e \"console.log('core: dist step ran')\"",
+    "test": "node -e \"console.log('core: test step ran')\"",
+    "lint": "node -e \"console.log('core: lint step ran')\"",
+    "prepack": "yarn run dist",
+    "prepublishOnly": "echo \"Publishing via npm is not allowed — use yarn npm publish!\" && exit 1"
+  }
+}

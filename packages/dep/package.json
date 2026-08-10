@@ -1,0 +1,22 @@
+{
+  "name": "@zbynekstara-test/dep",
+  "version": "1.0.0",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "main": "index.js",
+  "files": [
+    "index.js"
+  ],
+  "dependencies": {
+    "@zbynekstara-test/core": "workspace:~"
+  },
+  "scripts": {
+    "dist": "node -e \"console.log('dep: dist step ran')\"",
+    "test": "node -e \"console.log('dep: test step ran')\"",
+    "lint": "node -e \"console.log('dep: lint step ran')\"",
+    "prepack": "yarn run dist",
+    "prepublishOnly": "echo \"Publishing via npm is not allowed — use yarn npm publish!\" && exit 1"
+  }
+}

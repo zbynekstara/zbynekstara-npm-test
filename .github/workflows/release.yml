@@ -1,0 +1,153 @@
+# Phase 1 of the release pipeline: prepare the release and open the release PR.
+#
+# The maintainer's "release button": dispatch this workflow. It renders the root
+# CHANGELOG + RELEASE_NOTES.md from the pending changesets, applies the version
+# bumps (`changeset version`), commits the result to a `release/pending` branch, and
+# opens an auto-merging PR to `master`. Merging that PR triggers Phase 2
+# (`publish.yml`), which publishes to npm, tags, cuts the GitHub Release, and
+# refreshes `prod` — all automatically.
+#
+# Release channel: pick the `dist_tag` input (latest | alpha | beta). It is the single
+# source of truth — carried to Phase 2 via the committed RELEASE_CHANNEL file, which
+# publishes under that npm dist-tag: `latest` as a stable GitHub Release, `alpha`/`beta`
+# as a prerelease. For prerelease *version numbers* (x.y.z-beta.N), additionally run
+# `yarn changeset pre enter <tag>` on master before dispatching (and `pre exit` to
+# leave pre mode) — that only affects the numbering, not the channel.
+#
+# Required repository secrets:
+#   RELEASE_APP_ID          — GitHub App id (App must have contents:write + pull-requests:write)
+#   RELEASE_APP_PRIVATE_KEY — GitHub App private key
+# (Using an App token, not GITHUB_TOKEN, so the opened PR triggers test-pr.yml.)
+name: Release (prepare)
+
+on:
+  workflow_dispatch:
+    inputs:
+      dist_tag:
+        description: 'npm dist-tag / release channel. latest = stable Release; alpha/beta = prerelease.'
+        type: choice
+        options:
+          - latest
+          - alpha
+          - beta
+        default: latest
+      dry_run:
+        description: 'Render + version + build, but do not push the branch or open the PR.'
+        type: boolean
+        default: false
+
+# Prevent overlapping release preparations.
+concurrency:
+  group: release-prepare
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: ${{ github.repository == 'zbynekstara/zbynekstara-npm-test' }}
+    runs-on: ubuntu-latest
+    steps:
+      # A GitHub App token (not GITHUB_TOKEN) so the release PR triggers CI.
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      # Full history: the changelog renderer resolves each row's `master` commit
+      # (for the GitHub Release notes) from when its changeset was added.
+      - name: Checkout master
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Setup Node.js v22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.14.0
+
+      - name: Cache Yarn
+        uses: actions/cache@v4
+        with:
+          path: |
+            .yarn/cache
+          key: yarn-cache-${{ hashFiles('yarn.lock') }}
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      # Nothing to release if there are no changesets (README.md excluded).
+      - name: Guard — changesets present
+        run: |
+          shopt -s nullglob
+          count=0
+          for f in .changeset/*.md; do
+            [ "$(basename "$f")" = "README.md" ] || count=$((count+1))
+          done
+          if [ "$count" -eq 0 ]; then
+            echo "::error::No changesets found — nothing to release."
+            exit 1
+          fi
+          echo "Found $count changeset(s)."
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      # Writes info values to $GITHUB_OUTPUT:
+      # steps.info.outputs.release_title / core_version / core_changed / released.
+      - name: Version packages
+        id: info
+        run: yarn release-version
+
+      # Make sure the bumped repo still builds.
+      - name: Sanity build
+        run: yarn dist
+
+      - name: Push branch & open release PR
+        if: ${{ inputs.dry_run == false }}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          RELEASE_TITLE: ${{ steps.info.outputs.release_title }}
+        run: |
+          BRANCH="release/pending"
+          # Carry the chosen release channel to Phase 2 (publish.yml).
+          echo "${{ inputs.dist_tag }}" > RELEASE_CHANNEL
+          git checkout -B "$BRANCH"
+          git add -A
+          git commit -m "$RELEASE_TITLE"
+          git push --force origin "$BRANCH"
+          # Reuse an OPEN PR for this branch if one exists (refreshing its title/body,
+          # since the force-push just replaced the contents); otherwise open a new one.
+          # Restricting to `--state open` avoids matching a previous, already-merged
+          # release PR that still carries this head-ref name in history.
+          PR_NUMBER="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$PR_NUMBER" ]; then
+            echo "Reusing open PR #$PR_NUMBER for $BRANCH; refreshing title/body."
+            gh pr edit "$PR_NUMBER" --title "$RELEASE_TITLE" --body-file RELEASE_NOTES.md
+          else
+            PR_NUMBER="$(basename "$(gh pr create --base master --head "$BRANCH" \
+              --title "$RELEASE_TITLE" --body-file RELEASE_NOTES.md)")"
+            echo "Opened PR #$PR_NUMBER for $BRANCH."
+          fi
+          # Cosmetic label for humans only (NOT the publish trigger — publish.yml keys
+          # off the release/pending branch). Best-effort: skip if the label is absent.
+          gh pr edit "$PR_NUMBER" --add-label release 2>/dev/null \
+            || echo "note: 'release' label not applied (optional; create it in repo labels if wanted)"
+          gh pr merge "$PR_NUMBER" --auto --squash
+
+      - name: Dry-run summary
+        if: ${{ inputs.dry_run == true }}
+        run: |
+          echo "## Dry run — release NOT pushed" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "channel: ${{ inputs.dist_tag }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ steps.info.outputs.release_title }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "released: ${{ steps.info.outputs.released }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo "--- CHANGELOG (new top) ---" >> "$GITHUB_STEP_SUMMARY"
+          head -n 40 CHANGELOG >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,89 @@
+# CI checks for PRs (the required status check auto-merge waits on).
+# Mirrors clientIO/joint's test-pr.yml as closely as possible.
+name: Test PR
+
+# Trigger this workflow on:
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+# Cancel in-progress runs on new commits
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Job to run tests
+  test:
+    if: ${{ github.repository == 'zbynekstara/zbynekstara-npm-test' }}
+    runs-on: ubuntu-latest
+    steps:
+      # Checkout repo contents
+      - name: Checkout
+        id: checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Install environment packages (parity with joint — CJK fonts for its
+      # util.breakText text tests; a harmless no-op here, safe to drop).
+      - name: Install environment packages
+        id: install-environment-packages
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: |
+            fonts-arphic-ukai \
+            fonts-arphic-uming \
+            fonts-ipafont-mincho \
+            fonts-ipafont-gothic \
+            fonts-unfonts-core \
+            fonts-noto-core
+          version: 1.0
+
+      # Set up Node.js version for building
+      - name: Setup Node.js v22
+        id: setup-node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.14.0
+
+      # Cache Yarn packages to speed up CI
+      - name: Cache Yarn
+        id: cache-yarn
+        uses: actions/cache@v4
+        with:
+          path: |
+            .yarn/cache
+          key: yarn-cache-${{ hashFiles('yarn.lock') }}
+
+      # Install all dependencies
+      - name: Install dependencies
+        id: install-dependencies
+        run: yarn install --immutable
+
+      # A PR touching releasable files must add a changeset
+      # (See `.changeset/config.json`)
+      # The release PR (branch `release/*`) is exempt - it consumes changesets
+      - name: Enforce changeset
+        id: changeset-status
+        if: ${{ github.event_name == 'pull_request' && !startsWith(github.head_ref, 'release/') }}
+        run: |
+          git fetch origin master:refs/remotes/origin/master || true
+          yarn release-status --since=origin/master
+
+      # Build
+      - name: Build
+        id: build
+        run: yarn run dist
+
+      # Test
+      - name: Test
+        id: test
+        run: yarn run test
+
+      # Lint
+      - name: Lint
+        id: lint
+        run: yarn run lint
