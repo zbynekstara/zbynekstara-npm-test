@@ -6,16 +6,35 @@ A throwaway mirror of the JointJS Changesets release pipeline, used to validate 
 
 It mirrors the joint structure: a `packages/` folder with two packages —
 
-- **`@zbynekstara-test/core`** — the "core" package the `vX.Y.Z` tag + GitHub Release track.
+- **`@zbynekstara-test/core`** — stands in for `@joint/core`.
 - **`@zbynekstara-test/dep`** — depends on core via `workspace:~`, so the dependency
-  cascade (a core minor/major pushes `dep` out of range → `dep` republishes) is exercised.
+  cascade (a core minor/major pushes `dep` out of range → `dep` gets a patch release) is
+  exercised.
 
 The pipeline (identical logic to joint, package names swapped):
 
-- `.changeset/` — Changesets config (`changelog: false`; we render our own).
-- `scripts/release-info.mjs`, `scripts/changelog-from-changesets.mjs` — versioning info + CHANGELOG/RELEASE_NOTES renderer.
-- `package.json` scripts: `release-status`, `release-version`, `release-publish`.
-- `.github/workflows/`: `test-pr.yml` (changeset gate / required check), `release.yml` (Phase 1), `publish.yml` (Phase 2).
+- `.changeset/config.json` — Changesets config. Default changelog generator
+  (`@changesets/cli/changelog`), so **each package keeps its own `CHANGELOG.md`**;
+  `changedFilePatterns` defines what counts as releasable.
+- `.github/workflows/release.yml` — the whole release, on every push to `master`.
+  One workflow, three jobs: `select-mode` → `version` **or** `publish`.
+- `.github/workflows/test-pr.yml` — CI plus the `changeset status` gate.
+- No custom release scripts and no root `CHANGELOG` — the official
+  `changesets/action` sub-actions do the versioning, publishing, tagging and GitHub
+  Releases.
+
+## How the release works
+
+`release.yml` runs on every push to `master` and `changesets/action/select-mode@v2`
+picks the mode:
+
+| Repo state | Mode | What happens |
+| --- | --- | --- |
+| Pending changesets in `.changeset/` | `version` | Opens/updates the `changeset-release/master` PR titled **Version Packages**: version bumps, per-package `CHANGELOG.md` entries, consumed changesets deleted. |
+| `master` versions ahead of npm | `publish` | Builds (`yarn dist`), runs `changeset publish` (→ `yarn npm publish`), then a git tag + GitHub Release **per published package**. |
+| Neither | `none` | Nothing. |
+
+Nothing reaches npm until a maintainer merges the Version Packages PR.
 
 ---
 
@@ -32,43 +51,61 @@ gh repo create <you>/zbynekstara-npm-test --public --source=. --remote=origin --
 ```
 - Default branch must be **`master`** (the workflows use it). If GitHub made it `main`, rename to `master` (Settings → Branches, or `git push origin master && gh repo edit --default-branch master`).
 
-### 3. Secrets (Settings → Secrets and variables → Actions)
-- `NPM_TOKEN` = the safe granular token from step 1.
-- **GitHub App** (recommended, mirrors joint): create a free App with **contents: write** + **pull-requests: write**, install it on this repo, and add `RELEASE_APP_ID` + `RELEASE_APP_PRIVATE_KEY`.
-  - *Simpler PAT alternative:* replace the `Generate GitHub App token` step in both workflows with a classic PAT — set `token`/`GH_TOKEN` to `${{ secrets.RELEASE_TOKEN }}` and add that secret. (A non-`GITHUB_TOKEN` credential is required so the opened PR triggers `test-pr.yml`.)
+### 3. Secret (Settings → Secrets and variables → Actions)
+- `NPM_TOKEN` = the safe granular token from step 1. That's the **only** secret needed —
+  no GitHub App, no PAT (the sub-actions use the built-in `GITHUB_TOKEN`).
 
 ### 4. Repo settings
-- **Allow auto-merge**: Settings → General → Pull Requests → check "Allow auto-merge".
-- **Branch protection** on `master`: Settings → Branches → add rule → require the **`test`** status check (so auto-merge waits for CI). Allow the App/PAT to bypass if needed.
+- **Settings → Actions → General → "Allow GitHub Actions to create and approve pull
+  requests"** must be **enabled**, otherwise the `version` job cannot open the release PR.
+- **Branch protection:** leave `test` *un*required on `master`, or give the release PR an
+  explicit bypass. The release PR is opened by `github-actions[bot]` using `GITHUB_TOKEN`,
+  and GitHub does not fire `pull_request` workflows for it — so `test-pr.yml` never runs on
+  that PR and a required `test` check would block the merge forever. **Confirming this
+  behaviour is one of the things this repo is here to verify** (it is the main practical
+  difference from the previous GitHub-App-token pipeline, which did trigger CI on the
+  release PR).
 
 ---
 
 ## Validate
 
 ### A. Stable release (`latest`)
-1. Actions → **Release (prepare)** → Run workflow → `dist_tag: latest`.
-2. Watch: a `release/pending` PR opens, `test-pr` runs (proves the App/PAT triggers CI), and it **auto-merges** on green.
-3. Merge triggers **Release (publish)**. Confirm it:
+1. Land a changeset on `master` (there is one committed already — `yarn changeset` to add more).
+2. **Release** runs in `version` mode. Confirm it opens **Version Packages**
+   (`changeset-release/master`) and that the PR diff contains the bumps **and** a new
+   `packages/*/CHANGELOG.md` entry per package.
+3. Merge the PR. **Release** runs again, now in `publish` mode. Confirm it:
    - publishes to npm — `npm view @zbynekstara-test/core` and `@zbynekstara-test/dep`;
    - resolves the workspace range — `npm view @zbynekstara-test/dep dependencies` shows `@zbynekstara-test/core: ~1.1.0` (**not** `workspace:~`);
-   - cut the tag `v1.1.0` and a GitHub Release;
-   - created/updated the **`prod`** branch;
-   - the `prepublishOnly` guards did **not** block it (they'd have `exit 1` under raw `npm publish`).
+   - cut a git tag **per package** (`@zbynekstara-test/core@1.1.0`, …) and a GitHub Release for each;
+   - the `prepublishOnly` guards did **not** block it (they'd have `exit 1` under raw `npm publish`, so a green job proves Yarn was used).
 
-### B. Core-unchanged case
-Add a changeset that bumps only `dep` (`yarn changeset` → pick `dep`, patch), commit to `master`, then run **Release (prepare)** again. Confirm: `dep` republishes, **no** new tag/Release is cut, but `prod` still advances.
+### B. Dependency cascade / core-unchanged case
+Add a changeset that bumps only `dep` (`yarn changeset` → pick `dep`, patch) and land it on
+`master`. Confirm: `dep` republishes with its own tag + Release, `core` is untouched, and no
+`core` tag is cut. Then do the inverse — a `core` **minor** — and confirm `dep` gets an
+automatic patch ("Updated dependencies") because its `workspace:~` range had to move.
 
-### C. Prerelease channel
-Run **Release (prepare)** with `dist_tag: alpha`. Confirm packages publish under the `alpha` dist-tag (`npm view @zbynekstara-test/core dist-tags`) and the GitHub Release is marked **pre-release**.
+### C. The changeset gate
+Open a PR that edits `packages/core/index.js` with **no** changeset → `test-pr.yml` must
+fail on **Check changeset**. Add `yarn changeset add --empty` → it must pass. Then edit only
+a `.md` file with no changeset → must also pass (excluded by `changedFilePatterns`).
+
+### D. Prerelease channel
+On `master`: `yarn changeset pre enter beta`, commit, land a changeset. Versions become
+`x.y.z-beta.N` and `changeset publish` puts them on the **`beta`** npm dist-tag
+(`npm view @zbynekstara-test/core dist-tags`) with the GitHub Release marked
+**pre-release**. Leave with `yarn changeset pre exit`.
 
 ---
 
 ## Local smoke test (no npm, no token)
 ```bash
 yarn install
-yarn release-status                     # shows the pending plan
-node scripts/release-info.mjs           # release_title / core_version / released
-node scripts/changelog-from-changesets.mjs --dry-run   # preview CHANGELOG + RELEASE_NOTES
+yarn changeset status                    # shows the pending release plan
+yarn changeset status --since=origin/master   # exactly what CI's gate runs
+yarn changeset version                   # apply bumps + CHANGELOG.md locally, then `git checkout .`
 ```
 
 ## Cleanup when done

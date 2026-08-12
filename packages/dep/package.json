@@ -7,7 +7,8 @@
   },
   "main": "index.js",
   "files": [
-    "index.js"
+    "index.js",
+    "./CHANGELOG.md"
   ],
   "dependencies": {
     "@zbynekstara-test/core": "workspace:~"
@@ -16,7 +17,7 @@
     "dist": "node -e \"console.log('dep: dist step ran')\"",
     "test": "node -e \"console.log('dep: test step ran')\"",
     "lint": "node -e \"console.log('dep: lint step ran')\"",
-    "prepack": "yarn run dist",
-    "prepublishOnly": "echo \"Publishing via npm is not allowed — use yarn npm publish!\" && exit 1"
+    "prepublishOnly": "echo \"Publishing via NPM is not allowed!\" && exit 1",
+    "prepack": "yarn run dist"
   }
 }

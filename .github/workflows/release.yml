@@ -1,67 +1,53 @@
-# Phase 1 of the release pipeline: prepare the release and open the release PR.
+# Release pipeline, driven by Changesets (https://changesets.dev).
 #
-# The maintainer's "release button": dispatch this workflow. It renders the root
-# CHANGELOG + RELEASE_NOTES.md from the pending changesets, applies the version
-# bumps (`changeset version`), commits the result to a `release/pending` branch, and
-# opens an auto-merging PR to `master`. Merging that PR triggers Phase 2
-# (`publish.yml`), which publishes to npm, tags, cuts the GitHub Release, and
-# refreshes `prod` — all automatically.
+# On every push to `master` this workflow decides between two modes:
 #
-# Release channel: pick the `dist_tag` input (latest | alpha | beta). It is the single
-# source of truth — carried to Phase 2 via the committed RELEASE_CHANNEL file, which
-# publishes under that npm dist-tag: `latest` as a stable GitHub Release, `alpha`/`beta`
-# as a prerelease. For prerelease *version numbers* (x.y.z-beta.N), additionally run
-# `yarn changeset pre enter <tag>` on master before dispatching (and `pre exit` to
-# leave pre mode) — that only affects the numbering, not the channel.
+#   * `version` - there are pending changesets in `.changeset/`. The workflow
+#     applies the version bumps + per-package `CHANGELOG.md` entries, deletes
+#     the consumed changesets and opens (or updates) `changeset-release/master`
+#     PR titled "Version Packages".
+#   * `publish` - the release PR has been merged, so the versions in `master`
+#     are ahead of what is on npm. The workflow builds the workspace, publishes
+#     every changed public package, and creates a git tag + GitHub Release per
+#     published package.
 #
-# Required repository secrets:
-#   RELEASE_APP_ID          — GitHub App id (App must have contents:write + pull-requests:write)
-#   RELEASE_APP_PRIVATE_KEY — GitHub App private key
-# (Using an App token, not GITHUB_TOKEN, so the opened PR triggers test-pr.yml.)
-name: Release (prepare)
+# Nothing is published until the release PR is merged by a maintainer.
+#
+# Repository setup:
+#   * Settings > Actions > General > "Allow GitHub Actions to create and approve
+#     pull requests" must be enabled (needed to open the release PR).
+#   * Secret `NPM_TOKEN` - an npm automation token that bypasses 2FA.
+#
+# Note: the release PR is opened by `github-actions[bot]`, so `test-pr.yml` does
+# not run on it.
+name: Release
 
 on:
-  workflow_dispatch:
-    inputs:
-      dist_tag:
-        description: 'npm dist-tag / release channel. latest = stable Release; alpha/beta = prerelease.'
-        type: choice
-        options:
-          - latest
-          - alpha
-          - beta
-        default: latest
-      dry_run:
-        description: 'Render + version + build, but do not push the branch or open the PR.'
-        type: boolean
-        default: false
+  push:
+    branches: [ "master" ]
 
-# Prevent overlapping release preparations.
+# Reset permissions and grant them explicitly per job.
+permissions: {}
+
+# Never release twice at the same time.
 concurrency:
-  group: release-prepare
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  prepare:
+  # Decide whether this push should version or publish.
+  select-mode:
     if: ${{ github.repository == 'zbynekstara/zbynekstara-npm-test' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      mode: ${{ steps.select-mode.outputs.mode }}
     steps:
-      # A GitHub App token (not GITHUB_TOKEN) so the release PR triggers CI.
-      - name: Generate GitHub App token
-        id: app-token
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.RELEASE_APP_ID }}
-          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
-
-      # Full history: the changelog renderer resolves each row's `master` commit
-      # (for the GitHub Release notes) from when its changeset was added.
-      - name: Checkout master
+      - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: master
-          fetch-depth: 0
-          token: ${{ steps.app-token.outputs.token }}
+          persist-credentials: false
 
       - name: Setup Node.js v22
         uses: actions/setup-node@v4
@@ -78,76 +64,77 @@ jobs:
       - name: Install dependencies
         run: yarn install --immutable
 
-      # Nothing to release if there are no changesets (README.md excluded).
-      - name: Guard — changesets present
-        run: |
-          shopt -s nullglob
-          count=0
-          for f in .changeset/*.md; do
-            [ "$(basename "$f")" = "README.md" ] || count=$((count+1))
-          done
-          if [ "$count" -eq 0 ]; then
-            echo "::error::No changesets found — nothing to release."
-            exit 1
-          fi
-          echo "Found $count changeset(s)."
+      - name: Select Changesets mode
+        id: select-mode
+        uses: changesets/action/select-mode@v2
 
-      - name: Configure git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+  # Pending changesets: open/update the "Version Packages" PR.
+  version:
+    needs: select-mode
+    if: ${{ needs.select-mode.outputs.mode == 'version' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # commit the version bumps
+      pull-requests: write # open the release PR
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
-      # Writes info values to $GITHUB_OUTPUT:
-      # steps.info.outputs.release_title / core_version / core_changed / released.
+      - name: Setup Node.js v22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.14.0
+
+      - name: Cache Yarn
+        uses: actions/cache@v4
+        with:
+          path: |
+            .yarn/cache
+          key: yarn-cache-${{ hashFiles('yarn.lock') }}
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      # Runs `changeset version` and pushes the result to `changeset-release/master`.
       - name: Version packages
-        id: info
-        run: yarn release-version
+        uses: changesets/action/version@v2
 
-      # Make sure the bumped repo still builds.
-      - name: Sanity build
+  # Release PR merged: build and publish everything that is not on npm yet.
+  publish:
+    needs: select-mode
+    if: ${{ needs.select-mode.outputs.mode == 'publish' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push git tags and create GitHub Releases
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js v22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.14.0
+          # No `registry-url` on purpose (not used by Yarn)
+
+      - name: Cache Yarn
+        uses: actions/cache@v4
+        with:
+          path: |
+            .yarn/cache
+          key: yarn-cache-${{ hashFiles('yarn.lock') }}
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Build packages
         run: yarn dist
 
-      - name: Push branch & open release PR
-        if: ${{ inputs.dry_run == false }}
+      # Runs `changeset publish`, which publishes through `yarn npm publish` (Yarn Berry
+      # is auto-detected), then tags each published package and cuts a GitHub Release.
+      - name: Publish packages
+        uses: changesets/action/publish@v2
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          RELEASE_TITLE: ${{ steps.info.outputs.release_title }}
-        run: |
-          BRANCH="release/pending"
-          # Carry the chosen release channel to Phase 2 (publish.yml).
-          echo "${{ inputs.dist_tag }}" > RELEASE_CHANNEL
-          git checkout -B "$BRANCH"
-          git add -A
-          git commit -m "$RELEASE_TITLE"
-          git push --force origin "$BRANCH"
-          # Reuse an OPEN PR for this branch if one exists (refreshing its title/body,
-          # since the force-push just replaced the contents); otherwise open a new one.
-          # Restricting to `--state open` avoids matching a previous, already-merged
-          # release PR that still carries this head-ref name in history.
-          PR_NUMBER="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')"
-          if [ -n "$PR_NUMBER" ]; then
-            echo "Reusing open PR #$PR_NUMBER for $BRANCH; refreshing title/body."
-            gh pr edit "$PR_NUMBER" --title "$RELEASE_TITLE" --body-file RELEASE_NOTES.md
-          else
-            PR_NUMBER="$(basename "$(gh pr create --base master --head "$BRANCH" \
-              --title "$RELEASE_TITLE" --body-file RELEASE_NOTES.md)")"
-            echo "Opened PR #$PR_NUMBER for $BRANCH."
-          fi
-          # Cosmetic label for humans only (NOT the publish trigger — publish.yml keys
-          # off the release/pending branch). Best-effort: skip if the label is absent.
-          gh pr edit "$PR_NUMBER" --add-label release 2>/dev/null \
-            || echo "note: 'release' label not applied (optional; create it in repo labels if wanted)"
-          gh pr merge "$PR_NUMBER" --auto --squash
-
-      - name: Dry-run summary
-        if: ${{ inputs.dry_run == true }}
-        run: |
-          echo "## Dry run — release NOT pushed" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          echo "channel: ${{ inputs.dist_tag }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "${{ steps.info.outputs.release_title }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "released: ${{ steps.info.outputs.released }}" >> "$GITHUB_STEP_SUMMARY"
-          echo '' >> "$GITHUB_STEP_SUMMARY"
-          echo "--- CHANGELOG (new top) ---" >> "$GITHUB_STEP_SUMMARY"
-          head -n 40 CHANGELOG >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          YARN_NPM_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # No `NODE_AUTH_TOKEN` on purpose (must use Yarn)

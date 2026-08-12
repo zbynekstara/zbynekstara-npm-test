@@ -3,47 +3,131 @@
 Throwaway repo mirroring the JointJS Changesets release pipeline for end-to-end validation.
 Two packages: `@zbynekstara-test/core` and `@zbynekstara-test/dep` (dep → core via `workspace:~`).
 
+## Development Setup
+
+### Prerequisites
+
+- Node.js 22.14.0 (managed via [Volta](https://volta.sh/))
+- Yarn 4.7.0
+
+### Installation
+
+```bash
+git clone https://github.com/zbynekstara/zbynekstara-npm-test.git
+cd zbynekstara-npm-test
+yarn install
+```
+
+### Building
+
+```bash
+yarn dist
+```
+
+## Running Tests
+
+```bash
+yarn test
+```
+
+## Linting
+
+```bash
+yarn lint
+```
+
+## Project Structure
+
+This is a Yarn workspace monorepo. Packages:
+
+- `packages/core` — `@zbynekstara-test/core`, stands in for `@joint/core`
+- `packages/dep` — `@zbynekstara-test/dep`, depends on core via `workspace:~`, so the
+  dependency cascade (a core minor pushes `dep` out of range → `dep` gets a patch release)
+  is exercised
+
+## Pull Request Guidelines
+
+Before submitting a PR, please verify:
+
+- [ ] Code is up-to-date with the `master` branch
+- [ ] You've successfully run `yarn test` locally
+- [ ] If the change is releasable, you've added a changeset (`yarn changeset`)
+
+### Commit Message Format
+
+We use conventional commits. Format: `type(scope): description`
+
+Examples:
+- `fix(core): correct batch event options`
+- `feat(core): add a new option`
+- `docs: update contributing guide`
+
+Types: `feat`, `fix`, `style`, `refactor`, `test`, `chore`, `example`
+
 ## Changesets
 
-Versioning and the changelog are driven by [Changesets](https://github.com/changesets/changesets).
+Versions and changelogs are managed by [Changesets](https://changesets.dev). Every package
+keeps its own `CHANGELOG.md`, and each package is versioned independently.
+
 If your PR changes releasable code, add a changeset:
 
 ```bash
 yarn changeset
 ```
 
-Pick the affected package(s) and bump type, then write the changelog line(s) in the
-**same `type(scope): description` form as commits** — one row per line:
+Pick the affected package(s) and the bump type (`patch`, `minor`, `major`), then write a
+short summary. The summary is what ends up in the package's `CHANGELOG.md`, so write it for
+users of the package - we use the same `scope: description` style as commit messages:
 
 ```markdown
 ---
 "@zbynekstara-test/core": minor
 ---
-feat(core): add a thing
-fix(core): allow a thing
+
+core: add a new option to the pipeline validation entry point
 ```
 
-Commit the generated `.changeset/*.md` with your PR. CI (`changeset status`) fails a PR that
-changes releasable code without a changeset; docs-, test-, and demo-only PRs are exempt. Don't
-add PR/commit links by hand — the GitHub Release notes link each row to its `master` commit
-automatically. `feat` rows render verbatim; `fix` rows are prefixed with `fix to `. Non-`feat`/`fix`
-lines are ignored by the changelog renderer, and `!` before the `:` marks a breaking change. Only
-`@zbynekstara-test/core` and `@zbynekstara-test/dep` appear in the root `CHANGELOG`; any other
-publishable packages are still versioned and published, just not listed there.
+Commit the generated `.changeset/*.md` file with your PR.
+
+CI runs `changeset status --since=origin/master` and fails a PR that changes releasable
+code in a public package without a changeset. Test-, docs-, demo- and build-config-only
+changes are exempt - the exact list lives in `changedFilePatterns` in
+[.changeset/config.json](.changeset/config.json). If a PR touches releasable files but
+should not trigger a release, add an empty changeset:
+
+```bash
+yarn changeset add --empty
+```
 
 ## Releasing (maintainers)
 
-Releases are automated in two phases; no manual npm/tag/GitHub-Release steps.
+Releasing is automated by [.github/workflows/release.yml](.github/workflows/release.yml),
+which runs on every push to `master`:
 
-1. **Prepare** — dispatch the **Release (prepare)** workflow (`release.yml`), choosing the `dist_tag`
-   (`latest` | `alpha` | `beta`). It renders the root `CHANGELOG` + `RELEASE_NOTES.md` from the pending
-   changesets, applies the bumps (`changeset version`), and opens an auto-merging `release/pending` PR
-   to `master`.
-2. **Publish** — merging that PR triggers **Release (publish)** (`publish.yml`), which publishes the
-   changed packages to npm under the chosen `dist_tag` (via Yarn), tags `vX.Y.Z` + cuts one GitHub
-   Release when `@zbynekstara-test/core` changed, and force-updates `prod` to the merged commit.
+1. **Version** - while there are pending changesets, the workflow keeps a
+   `changeset-release/master` PR ("Version Packages") up to date. That PR applies the
+   version bumps, writes the per-package `CHANGELOG.md` entries and deletes the consumed
+   changesets.
+2. **Publish** - merging that PR is the release. The workflow then builds the workspace,
+   runs `changeset publish` (which publishes through `yarn npm publish`), and creates a git
+   tag plus a GitHub Release for every published package.
 
-The `dist_tag` input is the release channel: `latest` publishes a stable Release; `alpha`/`beta`
-publish a prerelease under that npm tag. To also get prerelease *version numbers* (`x.y.z-beta.N`),
-run `yarn changeset pre enter <tag>` on `master` before step 1 (and `yarn changeset pre exit` to
-return to stable) — that affects the numbering only, not the channel.
+Notes:
+
+- Private packages are never versioned or published.
+- `@zbynekstara-test/dep` depends on `@zbynekstara-test/core` with a `workspace:~` range, so
+  it gets an automatic patch release whenever `@zbynekstara-test/core` gets a minor release,
+  because its dependency range has to move.
+- Prereleases use the standard changesets pre mode: `yarn changeset pre enter beta` on
+  `master`, release as usual, then `yarn changeset pre exit`.
+- Snapshot releases: `yarn changeset version --snapshot` + `yarn changeset publish --tag`.
+- The `prepublishOnly` guards in each package `exit 1` under raw `npm publish`, so a green
+  publish job is itself proof that the pipeline went through Yarn.
+
+## Code Style
+
+- Run `yarn lint` before committing
+
+## Questions?
+
+See [README.md](README.md) for the validation plan this repo exists to run.

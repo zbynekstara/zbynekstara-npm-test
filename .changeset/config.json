@@ -1,10 +1,12 @@
 {
-  "changelog": false,
+  "$schema": "https://unpkg.com/@changesets/config@4.0.0/schema.json",
+  "baseBranch": "master",
+  "access": "public",
+  "changelog": "@changesets/cli/changelog",
   "commit": false,
+  "ignore": [],
   "fixed": [],
   "linked": [],
-  "access": "public",
-  "baseBranch": "master",
   "updateInternalDependencies": "patch",
   "privatePackages": {
     "version": false,
@@ -14,6 +16,7 @@
     "**",
     "!**/*.test.{js,jsx,ts,tsx,mjs}",
     "!**/test/**",
+    "!**/__tests__/**",
     "!**/__mocks__/**",
     "!**/bench/**",
     "!**/demo/**",
@@ -37,7 +40,6 @@
     "!**/karma.conf.js",
     "!**/tsconfig*.json",
     "!**/dts-generator.config.js",
-    "!**/api-extractor.json",
     "!**/knip.json",
     "!**/typedoc.*",
     "!**/.prettierrc*",
@@ -45,6 +47,5 @@
     "!**/eslint.config.mjs",
     "!**/*.md",
     "!**/LICENSE"
-  ],
-  "ignore": []
+  ]
 }

@@ -7,13 +7,14 @@
   },
   "main": "index.js",
   "files": [
-    "index.js"
+    "index.js",
+    "./CHANGELOG.md"
   ],
   "scripts": {
     "dist": "node -e \"console.log('core: dist step ran')\"",
     "test": "node -e \"console.log('core: test step ran')\"",
     "lint": "node -e \"console.log('core: lint step ran')\"",
-    "prepack": "yarn run dist",
-    "prepublishOnly": "echo \"Publishing via npm is not allowed — use yarn npm publish!\" && exit 1"
+    "prepublishOnly": "echo \"Publishing via NPM is not allowed!\" && exit 1",
+    "prepack": "yarn run dist"
   }
 }
