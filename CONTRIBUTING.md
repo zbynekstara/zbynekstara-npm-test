@@ -8,7 +8,7 @@ Two packages: `@zbynekstara-test/core` and `@zbynekstara-test/dep` (dep → core
 ### Prerequisites
 
 - Node.js 22.14.0 (managed via [Volta](https://volta.sh/))
-- Yarn 4.7.0
+- Yarn 4.18.0
 
 ### Installation
 
@@ -115,9 +115,9 @@ which runs on every push to `master`:
 Notes:
 
 - Private packages are never versioned or published.
-- `@zbynekstara-test/dep` depends on `@zbynekstara-test/core` with a `workspace:~` range, so
-  it gets an automatic patch release whenever `@zbynekstara-test/core` gets a minor release,
-  because its dependency range has to move.
+- `@zbynekstara-test/dep` depends on `@zbynekstara-test/core` with a `workspace:~` range, and
+  the two are a `linked` group, so a `core` release that pushes `dep` out of its dependency
+  range gives `dep` a matching bump instead of a bare patch.
 - Prereleases use the standard changesets pre mode: `yarn changeset pre enter beta` on
   `master`, release as usual, then `yarn changeset pre exit`.
 - Snapshot releases: `yarn changeset version --snapshot` + `yarn changeset publish --tag`.

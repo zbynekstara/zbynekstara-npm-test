@@ -8,14 +8,15 @@ It mirrors the joint structure: a `packages/` folder with two packages —
 
 - **`@zbynekstara-test/core`** — stands in for `@joint/core`.
 - **`@zbynekstara-test/dep`** — depends on core via `workspace:~`, so the dependency
-  cascade (a core minor/major pushes `dep` out of range → `dep` gets a patch release) is
-  exercised.
+  cascade (a core minor/major pushes `dep` out of range → `dep` gets a matching bump, via
+  the `linked` group) is exercised.
 
 The pipeline (identical logic to joint, package names swapped):
 
 - `.changeset/config.json` — Changesets config. Default changelog generator
   (`@changesets/cli/changelog`), so **each package keeps its own `CHANGELOG.md`**;
-  `changedFilePatterns` defines what counts as releasable.
+  `changedFilePatterns` defines what counts as releasable; `linked` keeps the two packages
+  on the same version line.
 - `.github/workflows/release.yml` — the whole release, on every push to `master`.
   One workflow, three jobs: `select-mode` → `version` **or** `publish`.
 - `.github/workflows/test-pr.yml` — CI plus the `changeset status` gate.
@@ -84,8 +85,13 @@ gh repo create <you>/zbynekstara-npm-test --public --source=. --remote=origin --
 ### B. Dependency cascade / core-unchanged case
 Add a changeset that bumps only `dep` (`yarn changeset` → pick `dep`, patch) and land it on
 `master`. Confirm: `dep` republishes with its own tag + Release, `core` is untouched, and no
-`core` tag is cut. Then do the inverse — a `core` **minor** — and confirm `dep` gets an
-automatic patch ("Updated dependencies") because its `workspace:~` range had to move.
+`core` tag is cut. Then do the inverse — a `core` **minor** — and confirm `dep` is published
+at the **same minor version** as `core`, not a bare patch (the `linked` group; its
+`CHANGELOG.md` still reads "Patch Changes — Updated dependencies", which is expected).
+
+Also confirm the reverse direction, since `linked` converges both ways: land a `dep`
+**minor** and a `core` **patch** in the same release and check that `core` is lifted to that
+minor version too.
 
 ### C. The changeset gate
 Open a PR that edits `packages/core/index.js` with **no** changeset → `test-pr.yml` must
