@@ -6,7 +6,12 @@
   "commit": false,
   "ignore": [],
   "fixed": [],
-  "linked": [],
+  "linked": [
+    [
+      "@zbynekstara-test/core",
+      "@zbynekstara-test/dep"
+    ]
+  ],
   "updateInternalDependencies": "patch",
   "privatePackages": {
     "version": false,
